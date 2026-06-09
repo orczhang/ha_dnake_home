@@ -65,8 +65,12 @@ class __AssistantCore:
             return None
 
     def do_action(self, data: dict):
+        _LOGGER.debug(f"Sending action: {data}")
         resp = self.post(data)
-        return resp and resp.get("result") == "ok"
+        _LOGGER.debug(f"Action response: {resp}")
+        result = resp and resp.get("result") == "ok"
+        _LOGGER.debug(f"Action result: {result}")
+        return result
 
 
 class Assistant(__AssistantCore):
@@ -100,7 +104,9 @@ class Assistant(__AssistantCore):
             }
         )
         if state_info:
-            return state_info
+            # 返回 data 字段中的设备状态
+            data = state_info.get("data", state_info)
+            return data
         else:
             _LOGGER.error(f"query device status fail: devNo={dev_no},devCh={dev_ch}")
             return None
@@ -108,7 +114,9 @@ class Assistant(__AssistantCore):
     def read_all_dev_state(self):
         state_info = self.post({"action": Action.ReadAllDevState.value})
         if state_info:
-            return state_info.get("devList")
+            # 返回 data.devList 字段中的设备状态列表
+            data = state_info.get("data", state_info)
+            return data.get("devList") if isinstance(data, dict) else state_info.get("devList")
         else:
             _LOGGER.error("query all device status fail")
             return None
@@ -199,6 +207,50 @@ class Assistant(__AssistantCore):
                 "action": Action.CtrlDev.value,
                 "cmd": Cmd.AirCondition.value,
                 "oper": "setSwing",
+                "param": mode,
+                "devNo": dev_no,
+                "devCh": dev_ch,
+            }
+        )
+
+    # 新风控制函数
+    def set_air_fresh_power(self, dev_no, dev_ch, is_open: bool):
+        """控制新风开关"""
+        power = Power.On if is_open else Power.Off
+        return self.do_action(
+            {
+                "action": Action.CtrlDev.value,
+                "cmd": Cmd.AirFresh.value,
+                "oper": power.value,
+                "devNo": dev_no,
+                "devCh": dev_ch,
+            }
+        )
+
+    def set_air_fresh_speed(self, dev_no, dev_ch, speed: int):
+        """控制新风风速
+        speed: 0=低速, 1=中速, 2=高速
+        """
+        return self.do_action(
+            {
+                "action": Action.CtrlDev.value,
+                "cmd": Cmd.AirFresh.value,
+                "oper": "setFlow",
+                "param": speed,
+                "devNo": dev_no,
+                "devCh": dev_ch,
+            }
+        )
+
+    def set_air_fresh_mode(self, dev_no, dev_ch, mode: int):
+        """控制新风模式
+        mode: 0=自动, 1=制冷, 2=制热, 3=送风
+        """
+        return self.do_action(
+            {
+                "action": Action.CtrlDev.value,
+                "cmd": Cmd.AirFresh.value,
+                "oper": "setMode",
                 "param": mode,
                 "devNo": dev_no,
                 "devCh": dev_ch,
