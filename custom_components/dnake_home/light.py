@@ -16,7 +16,18 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def load_lights(device_list):
-    lights = [DnakeLight(device) for device in device_list if device.get("ty") == 256]
+    # 过滤灯具设备并去重（基于设备编号和通道）
+    seen = set()
+    lights = []
+    for device in device_list:
+        if device.get("ty") == 256:
+            dev_key = (device.get("nm"), device.get("ch"))
+            if dev_key not in seen:
+                seen.add(dev_key)
+                lights.append(DnakeLight(device))
+            else:
+                _LOGGER.warning(f"Duplicate light device found: {device.get('na')} (nm={device.get('nm')}, ch={device.get('ch')})")
+    
     _LOGGER.info(f"find light num: {len(lights)}")
     assistant.entries["light"] = lights
 
@@ -61,7 +72,6 @@ class DnakeLight(LightEntity):
             name=self._name,
             manufacturer=MANUFACTURER,
             model="灯光控制",
-            via_device=(DOMAIN, "gateway"),
         )
 
     @property
