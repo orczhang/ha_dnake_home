@@ -41,11 +41,48 @@ _air_condition_swing_table = {
 _air_condition_fan_table = {0: FAN_LOW, 1: FAN_MIDDLE, 2: FAN_HIGH}
 
 
+CLIMATE_DEVICE_TYPES = {1536, 16640, 16671}
+
+
 def load_climates(device_list):
-    air_conditions = [
-        DnakeAirCondition(device) for device in device_list if device.get("ty") == 16640
-    ]
-    _LOGGER.info(f"find air_condition num: {len(air_conditions)}")
+    # 过滤空调设备并去重（基于设备编号和通道）
+    seen = set()
+    air_conditions = []
+    candidates = []
+    for device in device_list:
+        ty = device.get("ty")
+        name = device.get("na", "")
+        if ty in CLIMATE_DEVICE_TYPES or "空调" in str(name):
+            dev_key = (device.get("nm"), device.get("ch"))
+            candidates.append((name, ty, dev_key))
+            if dev_key not in seen:
+                seen.add(dev_key)
+                if ty not in CLIMATE_DEVICE_TYPES:
+                    _LOGGER.warning(
+                        f"Load device as climate even though type is unexpected: {name} (ty={ty})"
+                    )
+                air_conditions.append(DnakeAirCondition(device))
+            else:
+                _LOGGER.warning(
+                    f"Duplicate climate device found: {name} (nm={device.get('nm')}, ch={device.get('ch')})"
+                )
+
+    _LOGGER.info(
+        f"find air_condition num: {len(air_conditions)}, climate candidates: {[(n, t) for n, t, _ in candidates]}"
+    )
+    for climate in air_conditions:
+        _LOGGER.info(
+            "Climate entity loaded: name=%s, nm=%s, ch=%s, type=%s",
+            climate._name,
+            climate._dev_no,
+            climate._dev_ch,
+            climate._dev_type,
+        )
+    if not air_conditions and candidates:
+        _LOGGER.warning(
+            "Found potential climate devices but none were loaded as entities. "
+            "Please check device types and fields."
+        )
     assistant.entries["climate"] = air_conditions
 
 
@@ -104,7 +141,6 @@ class DnakeAirCondition(ClimateEntity):
             name=self._name,
             manufacturer=MANUFACTURER,
             model="空调控制",
-            via_device=(DOMAIN, "gateway"),
         )
 
     @property
