@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from datetime import timedelta
 
@@ -49,7 +48,8 @@ class DnakeCover(CoverEntity):
         self._dev_ch = device.get("ch")
         self._current_level = device.get("level", 0)
         self._target_level = self._current_level
-        self._level_refresher_cancel = None
+        self._poll_cancel = None
+        self._poll_count = 0
 
     def is_hint_state(self, state):
         return state.get("devNo") == self._dev_no and state.get("devCh") == self._dev_ch
@@ -65,7 +65,6 @@ class DnakeCover(CoverEntity):
             name=self._name,
             manufacturer=MANUFACTURER,
             model="窗帘控制",
-            via_device=(DOMAIN, "gateway"),
         )
 
     @property
@@ -95,69 +94,112 @@ class DnakeCover(CoverEntity):
 
     @property
     def supported_features(self):
+        # 支持打开/关闭/停止（HomeKit 会显示三个按钮）
         return (
                 CoverEntityFeature.OPEN
                 | CoverEntityFeature.CLOSE
                 | CoverEntityFeature.STOP
-                | CoverEntityFeature.SET_POSITION
         )
-
-    async def async_close_cover(self, **kwargs):
-        await self.async_set_cover_position(position=0)
 
     async def async_open_cover(self, **kwargs):
-        await self.async_set_cover_position(position=100)
-
-    async def async_set_cover_position(self, **kwargs):
-        target_level = int((kwargs.get("position", 0) / 100) * 254)
+        """打开窗帘 - 使用 on 命令"""
         is_success = await self.hass.async_add_executor_job(
-            assistant.set_level,
-            self._dev_no,
-            self._dev_ch,
-            target_level,
+            assistant.do_action,
+            {
+                "action": "ctrlDev",
+                "cmd": "on",
+                "devNo": self._dev_no,
+                "devCh": self._dev_ch,
+            },
         )
         if is_success:
-            self._target_level = target_level
-            self._start_schedule_update()
-        else:
-            _LOGGER.error("set cover position fail")
+            self._target_level = 254
+            self.async_write_ha_state()
+            self._start_monitoring()
+
+    async def async_close_cover(self, **kwargs):
+        """关闭窗帘 - 使用 off 命令"""
+        is_success = await self.hass.async_add_executor_job(
+            assistant.do_action,
+            {
+                "action": "ctrlDev",
+                "cmd": "off",
+                "devNo": self._dev_no,
+                "devCh": self._dev_ch,
+            },
+        )
+        if is_success:
+            self._target_level = 0
+            self.async_write_ha_state()
+            self._start_monitoring()
 
     async def async_stop_cover(self, **kwargs):
+        """停止窗帘"""
         is_success = await self.hass.async_add_executor_job(
-            assistant.stop,
-            self._dev_no,
-            self._dev_ch,
+            assistant.do_action,
+            {
+                "action": "ctrlDev",
+                "cmd": "stop",
+                "devNo": self._dev_no,
+                "devCh": self._dev_ch,
+            },
         )
         if is_success:
-            self._stop_schedule_update()
-            await asyncio.sleep(1)
-            await self._async_refresh_level()
+            self._stop_monitoring()
+            self._target_level = self._current_level
+            self.async_write_ha_state()
 
-    def _start_schedule_update(self):
-        self._stop_schedule_update()
-        self._level_refresher_cancel = async_track_time_interval(
+    def _start_monitoring(self):
+        """开始监控窗帘状态"""
+        self._stop_monitoring()
+        self._poll_count = 0
+        self._poll_cancel = async_track_time_interval(
             self.hass,
-            self._do_schedule_update,
-            timedelta(milliseconds=500),
+            self._do_monitor,
+            timedelta(seconds=1),
         )
 
-    async def _do_schedule_update(self, now=None):
-        await self._async_refresh_level(update_target_level=False)
-        if self._current_level == self._target_level:
-            self._stop_schedule_update()
+    def _stop_monitoring(self):
+        """停止监控窗帘状态"""
+        if self._poll_cancel:
+            self._poll_cancel()
+            self._poll_cancel = None
 
-    def _stop_schedule_update(self):
-        if self._level_refresher_cancel:
-            self._level_refresher_cancel()
-
-    async def _async_refresh_level(self, update_target_level=True):
+    async def _do_monitor(self, now=None):
+        """定期监控窗帘状态"""
+        self._poll_count += 1
         state = await self.hass.async_add_executor_job(
             assistant.read_dev_state,
             self._dev_no,
             self._dev_ch,
         )
         if state and state.get("result") == "ok":
-            self.update_state(state, update_target_level=update_target_level)
+            self.update_state(state, update_target_level=False)
+            # 检查是否到达目标
+            if abs(self._current_level - self._target_level) < 5:
+                self._stop_monitoring()
+            # 最多监控 60 秒
+            elif self._poll_count >= 60:
+                self._stop_monitoring()
+
+    async def _refresh_state(self):
+        """刷新窗帘状态"""
+        state = await self.hass.async_add_executor_job(
+            assistant.read_dev_state,
+            self._dev_no,
+            self._dev_ch,
+        )
+        if state and state.get("result") == "ok":
+            self.update_state(state)
+
+        """刷新窗帘状态"""
+        state = await self.hass.async_add_executor_job(
+            assistant.read_dev_state,
+            self._dev_no,
+            self._dev_ch,
+        )
+        if state and state.get("result") == "ok":
+            self.update_state(state)
 
     def update_state(self, state, update_target_level=True):
         current_level = state.get("level", 0)
